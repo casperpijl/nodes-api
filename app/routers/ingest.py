@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 
 from ..deps import ingest_authed, IngestAuthed
@@ -144,3 +144,182 @@ async def ingest_workflow_run(
         workflow_id=str(workflow_id),
         message=f"Workflow run recorded successfully for '{payload.workflow_name}'"
     )
+
+
+# ============================================================================
+# APPROVAL INGEST
+# ============================================================================
+
+class ApprovalAssetPayload(BaseModel):
+    """Asset (file) attached to an approval"""
+    role: str = Field(..., description="Asset role: 'source_email_body_html', 'draft_order_confirmation_pdf', etc.")
+    storage_provider: str = Field(default="minio", description="Storage provider: 'minio', 's3', 'external', 'local'")
+    storage_key: Optional[str] = Field(None, description="MinIO/S3 key path (e.g., 'approvals/order-1042/confirm.pdf')")
+    external_url: str = Field(..., description="Presigned URL from MinIO/S3 (24-48h expiry)")
+    filename: Optional[str] = Field(None, description="Original filename")
+    mime_type: Optional[str] = Field(None, description="MIME type (e.g., 'application/pdf')")
+    size_bytes: Optional[int] = Field(None, description="File size in bytes")
+
+
+class ApprovalIngestPayload(BaseModel):
+    """Payload sent from n8n to create an approval"""
+    type: str = Field(..., description="Approval type: 'order', 'linkedin_post', 'gmail_reply'")
+    title: str = Field(..., description="Short title (e.g., 'Order BR-2025-1042')")
+    preview: Dict[str, Any] = Field(..., description="UI preview data (free-form JSON)")
+    data: Dict[str, Any] = Field(..., description="Execution payload (free-form JSON)")
+    n8n_execute_webhook_url: str = Field(..., description="Full webhook URL to call on approval")
+    assets: List[ApprovalAssetPayload] = Field(default_factory=list, description="List of assets")
+
+
+class ApprovalIngestResponse(BaseModel):
+    """Response after successfully creating an approval"""
+    ok: bool
+    approval_id: str
+    message: str
+
+
+@router.post("/approval", response_model=ApprovalIngestResponse)
+async def ingest_approval(
+    payload: ApprovalIngestPayload,
+    auth: IngestAuthed = Depends(ingest_authed),
+    db: AsyncSession = Depends(get_session)
+):
+    """
+    Create a new approval with assets.
+    
+    This endpoint:
+    1. Validates the ingest token (automatically extracts org_id from token)
+    2. Validates the type is in allowed list
+    3. Inserts approval record (status='pending')
+    4. Inserts all assets (linked to approval_id)
+    5. Logs 'created' event
+    6. Returns approval_id
+    
+    Authentication: Bearer token in Authorization header
+    
+    Example payload for type='order':
+    {
+        "type": "order",
+        "title": "Order BR-2025-1042",
+        "preview": {
+            "email_header": {
+                "from": "customer@example.com",
+                "to": "orders@company.com",
+                "subject": "Bestelling BR-2025-1042",
+                "date": "2025-10-23T09:41:00Z"
+            },
+            "badges": ["3 attachments", "€1,234.56"]
+        },
+        "data": {
+            "order_ref": "BR-2025-1042",
+            "customer_mail": {...},
+            "internal_mail": {...},
+            "source": {...}
+        },
+        "n8n_execute_webhook_url": "https://n8n.example.com/webhook/execute-order-BR-2025-1042",
+        "assets": [...]
+    }
+    """
+    
+    # Validate type
+    valid_types = ["order", "linkedin_post", "gmail_reply"]
+    if payload.type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid type. Must be one of: {', '.join(valid_types)}"
+        )
+    
+    # Step 1: Insert approval record
+    insert_approval_query = text("""
+        INSERT INTO approvals (
+            org_id,
+            type,
+            status,
+            title,
+            preview,
+            data,
+            n8n_execute_webhook_url
+        )
+        VALUES (
+            :org_id,
+            :type,
+            'pending',
+            :title,
+            :preview,
+            :data,
+            :webhook_url
+        )
+        RETURNING id
+    """)
+    
+    result = await db.execute(insert_approval_query, {
+        "org_id": auth.org_id,
+        "type": payload.type,
+        "title": payload.title,
+        "preview": json.dumps(payload.preview),
+        "data": json.dumps(payload.data),
+        "webhook_url": payload.n8n_execute_webhook_url
+    })
+    
+    approval_id = result.scalar_one()
+    
+    # Step 2: Insert assets
+    if payload.assets:
+        insert_asset_query = text("""
+            INSERT INTO approval_assets (
+                approval_id,
+                role,
+                storage_provider,
+                storage_key,
+                external_url,
+                filename,
+                mime_type,
+                size_bytes
+            )
+            VALUES (
+                :approval_id,
+                :role,
+                :storage_provider,
+                :storage_key,
+                :external_url,
+                :filename,
+                :mime_type,
+                :size_bytes
+            )
+        """)
+        
+        for asset in payload.assets:
+            await db.execute(insert_asset_query, {
+                "approval_id": approval_id,
+                "role": asset.role,
+                "storage_provider": asset.storage_provider,
+                "storage_key": asset.storage_key,
+                "external_url": asset.external_url,
+                "filename": asset.filename,
+                "mime_type": asset.mime_type,
+                "size_bytes": asset.size_bytes
+            })
+    
+    # Step 3: Log 'created' event
+    insert_event_query = text("""
+        INSERT INTO approval_events (approval_id, event, metadata)
+        VALUES (:approval_id, 'created', :metadata)
+    """)
+    
+    await db.execute(insert_event_query, {
+        "approval_id": approval_id,
+        "metadata": json.dumps({
+            "type": payload.type,
+            "asset_count": len(payload.assets),
+            "token_name": auth.token_name
+        })
+    })
+    
+    await db.commit()
+    
+    return ApprovalIngestResponse(
+        ok=True,
+        approval_id=str(approval_id),
+        message=f"Approval created successfully: {payload.title}"
+    )
+
