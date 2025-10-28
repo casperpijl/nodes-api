@@ -1,20 +1,10 @@
-FROM python:3.12-slim
-
-# System basics
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
-    wget \
-    gnupg \
-    && rm -rf /var/lib/apt/lists/*
+FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 
 WORKDIR /app
 
 # Install deps first (better layer caching)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir playwright && \
-    playwright install --with-deps chromium
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy app code
 COPY app ./app
