@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Response, HTTPException, status
+from fastapi import APIRouter, Depends, Response, HTTPException, status, Query
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
@@ -44,7 +44,7 @@ class HtmlRenderRequest(BaseModel):
 async def render_pdf(
     body: HtmlRenderRequest,
     auth: IngestAuthed = Depends(ingest_authed),
-    return_: Optional[str] = None,
+    return_: Optional[str] = Query(default=None, alias="return"),
 ):
     try:
         # Lazy import to avoid import-time overhead
