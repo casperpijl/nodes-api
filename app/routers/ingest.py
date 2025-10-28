@@ -162,11 +162,16 @@ class ApprovalAssetPayload(BaseModel):
 
 
 class ApprovalIngestPayload(BaseModel):
-    """Payload sent from n8n to create an approval"""
+    """Payload sent from n8n to create an approval
+
+    Note: preview will be embedded into data.preview for storage so that
+    all consumer data lives under one JSON column. The legacy preview
+    column is kept for backward compatibility but not relied upon.
+    """
     type: str = Field(..., description="Approval type: 'order', 'linkedin_post', 'gmail_reply'")
     title: str = Field(..., description="Short title (e.g., 'Order BR-2025-1042')")
-    preview: Dict[str, Any] = Field(..., description="UI preview data (free-form JSON)")
-    data: Dict[str, Any] = Field(..., description="Execution payload (free-form JSON)")
+    preview: Dict[str, Any] = Field({}, description="UI preview data (free-form JSON)")
+    data: Dict[str, Any] = Field(default_factory=dict, description="Execution payload (free-form JSON)")
     n8n_execute_webhook_url: str = Field(..., description="Full webhook URL to call on approval")
     assets: List[ApprovalAssetPayload] = Field(default_factory=list, description="List of assets")
 
@@ -230,13 +235,21 @@ async def ingest_approval(
         )
     
     # Step 1: Insert approval record
+    # Combine preview into data.preview to keep a single source of truth
+    combined_data = dict(payload.data or {})
+    try:
+        # only set if not already provided by client
+        if payload.preview and "preview" not in combined_data:
+            combined_data["preview"] = payload.preview
+    except Exception:
+        # be defensive; always ensure combined_data is serializable
+        pass
     insert_approval_query = text("""
         INSERT INTO approvals (
             org_id,
             type,
             status,
             title,
-            preview,
             data,
             n8n_execute_webhook_url
         )
@@ -245,7 +258,6 @@ async def ingest_approval(
             :type,
             'pending',
             :title,
-            :preview,
             :data,
             :webhook_url
         )
@@ -256,8 +268,7 @@ async def ingest_approval(
         "org_id": auth.org_id,
         "type": payload.type,
         "title": payload.title,
-        "preview": json.dumps(payload.preview),
-        "data": json.dumps(payload.data),
+        "data": json.dumps(combined_data),
         "webhook_url": payload.n8n_execute_webhook_url
     })
     
