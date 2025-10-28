@@ -30,7 +30,8 @@ class PdfOptions(BaseModel):
     marginRight: str = Field(default="10mm")
     marginBottom: str = Field(default="10mm")
     marginLeft: str = Field(default="10mm")
-    waitUntil: Literal["load", "domcontentloaded", "networkidle0", "networkidle2"] = Field(default="networkidle0")
+    # Accept puppeteer-style and playwright-style values, normalize later
+    waitUntil: Literal["load", "domcontentloaded", "networkidle0", "networkidle2", "networkidle", "commit"] = Field(default="networkidle0")
     fileName: Optional[str] = Field(default="document.pdf")
 
 
@@ -64,7 +65,9 @@ async def render_pdf(
         "bottom": body.options.marginBottom,
         "left": body.options.marginLeft,
     }
-    wait_until = body.options.waitUntil
+    # Normalize waitUntil for Playwright: `networkidle0/2` -> `networkidle`
+    wait_until_in = body.options.waitUntil
+    wait_until = "networkidle" if wait_until_in in ("networkidle0", "networkidle2", "networkidle") else wait_until_in
 
     # Render using Playwright
     pdf_bytes: bytes
