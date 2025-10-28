@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import API_NAME, CORS_ORIGINS
 from .routers import ingest as ingest_router
+from .routers import render as render_router
 
 app = FastAPI(title=API_NAME)
 
@@ -20,3 +21,4 @@ async def health():
 
 # Register ingest router
 app.include_router(ingest_router.router)
+app.include_router(render_router.router)
