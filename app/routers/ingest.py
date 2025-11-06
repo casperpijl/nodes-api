@@ -171,7 +171,7 @@ class ApprovalIngestPayload(BaseModel):
     title: str = Field(..., description="Short title (e.g., 'Order BR-2025-1042')")
     preview: Dict[str, Any] = Field({}, description="UI preview data (ignored, not stored)")
     data: Dict[str, Any] = Field(default_factory=dict, description="Execution payload (free-form JSON)")
-    n8n_execute_webhook_url: str = Field(..., description="Full webhook URL to call on approval")
+    n8n_execute_webhook_url: Optional[str] = Field(None, description="Optional webhook URL (deprecated - use org-level webhook)")
     assets: List[ApprovalAssetPayload] = Field(default_factory=list, description="List of assets")
 
 
@@ -261,7 +261,7 @@ async def ingest_approval(
         "type": payload.type,
         "title": payload.title,
         "data": json.dumps(combined_data),
-        "webhook_url": payload.n8n_execute_webhook_url
+        "webhook_url": payload.n8n_execute_webhook_url  # Can be None now
     })
     
     approval_id = result.scalar_one()
