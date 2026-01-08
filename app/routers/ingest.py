@@ -167,7 +167,7 @@ class ApprovalIngestPayload(BaseModel):
     The preview field is accepted for request compatibility but is not stored.
     Only `data` is persisted in the approvals table.
     """
-    type: str = Field(..., description="Approval type: 'order', 'linkedin_post', 'gmail_reply'")
+    type: str = Field(..., description="Approval type: 'order', 'linkedin_post', 'gmail_reply', 'forward_gmail'")
     title: str = Field(..., description="Short title (e.g., 'Order BR-2025-1042')")
     preview: Dict[str, Any] = Field({}, description="UI preview data (ignored, not stored)")
     data: Dict[str, Any] = Field(default_factory=dict, description="Execution payload (free-form JSON)")
@@ -226,7 +226,7 @@ async def ingest_approval(
     """
     
     # Validate type
-    valid_types = ["order", "linkedin_post", "gmail_reply"]
+    valid_types = ["order", "linkedin_post", "gmail_reply", "forward_gmail"]
     if payload.type not in valid_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
